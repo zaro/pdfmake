@@ -81,9 +81,10 @@ module.exports = function(grunt) {
 					'build/pdfmake.js': ['./src/browser-extensions/pdfMake.js']
 				},
 				options: {
-					require: ['./src/browser-extensions/virtual-fs.js:fs', './src/browser-extensions/pdfMake.js:pdfMake'],
+					//require: ['./src/browser-extensions/virtual-fs.js:fs', './src/browser-extensions/pdfMake.js:pdfMake'],
 					browserifyOptions: {
-						standalone: 'pdfMake'
+						standalone: 'pdfMake',
+						alias: './src/browser-extensions/virtual-fs.js:fs'
 					}
 				}
 			}
