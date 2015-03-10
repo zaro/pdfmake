@@ -29359,9 +29359,9 @@ function DocumentContext(pageSize, pageMargins) {
 	this.snapshots = [];
 
 	this.endingCell = null;
-    
+
   this.tracker = new TraversalTracker();
-    
+
 	this.addPage(pageSize);
 }
 
@@ -29464,6 +29464,41 @@ DocumentContext.prototype.pageSnapshot = function(){
   }
 };
 
+DocumentContext.prototype.moveTo = function(x,y) {
+	if(x !== undefined && x !== null) {
+		this.x = x;
+		this.availableWidth = this.getCurrentPage().pageSize.width - this.x - this.pageMargins.right;
+	}
+	if(y !== undefined && y !== null){
+		this.y = y;
+		this.availableHeight = this.getCurrentPage().pageSize.height - this.y - this.pageMargins.bottom;
+	}
+};
+
+DocumentContext.prototype.beginDetachedBlock = function() {
+	this.snapshots.push({
+		x: this.x,
+		y: this.y,
+		availableHeight: this.availableHeight,
+		availableWidth: this.availableWidth,
+		page: this.page,
+		endingCell: this.endingCell,
+		lastColumnWidth: this.lastColumnWidth
+	});
+};
+
+DocumentContext.prototype.endDetachedBlock = function() {
+	var saved = this.snapshots.pop();
+
+	this.x = saved.x;
+	this.y = saved.y;
+	this.availableWidth = saved.availableWidth;
+	this.availableHeight = saved.availableHeight;
+	this.page = saved.page;
+	this.endingCell = saved.endingCell;
+	this.lastColumnWidth = saved.lastColumnWidth;
+};
+
 function pageOrientation(pageOrientationString, currentPageOrientation){
 	if(pageOrientationString === undefined) {
 		return currentPageOrientation;
@@ -29475,9 +29510,9 @@ function pageOrientation(pageOrientationString, currentPageOrientation){
 }
 
 var getPageSize = function (currentPage, newPageOrientation) {
-	
+
 	newPageOrientation = pageOrientation(newPageOrientation, currentPage.pageSize.orientation);
-	
+
 	if(newPageOrientation !== currentPage.pageSize.orientation) {
 		return {
 			orientation: newPageOrientation,
@@ -29491,7 +29526,7 @@ var getPageSize = function (currentPage, newPageOrientation) {
 			height: currentPage.pageSize.height
 		};
 	}
-	
+
 };
 
 
@@ -29525,7 +29560,7 @@ DocumentContext.prototype.addPage = function(pageSize) {
 	this.initializePage();
 
 	this.tracker.emit('pageAdded');
-    
+
 	return page;
 };
 
@@ -29543,6 +29578,8 @@ DocumentContext.prototype.getCurrentPosition = function() {
   return {
     pageNumber: this.page + 1,
     pageOrientation: pageSize.orientation,
+    pageInnerHeight: innerHeight,
+    pageInnerWidth: innerWidth,
     left: this.x,
     top: this.y,
     verticalRatio: ((this.y - this.pageMargins.top) / innerHeight),
@@ -30003,7 +30040,11 @@ LayoutBuilder.prototype.layoutDocument = function (docStructure, fontProvider, s
     });
 
     _.each(linearNodeList, function(node) {
-      var nodeInfo = _.pick(node, ['id', 'headlineLevel', 'text', 'ul', 'ol', 'table', 'image', 'qr', 'canvas', 'columns', 'style', 'pageOrientation']);
+      var nodeInfo = _.pick(node, [
+        'id', 'text', 'ul', 'ol', 'table', 'image', 'qr', 'canvas', 'columns',
+        'headlineLevel', 'style', 'pageBreak', 'pageOrientation',
+        'width', 'height'
+      ]);
       nodeInfo.startPosition = _.first(node.positions);
       nodeInfo.pageNumbers = _.chain(node.positions).map('pageNumber').uniq().value();
       nodeInfo.pages = pages.length;
@@ -30013,8 +30054,8 @@ LayoutBuilder.prototype.layoutDocument = function (docStructure, fontProvider, s
     });
 
     return _.any(linearNodeList, function (node, index, followingNodeList) {
-
-      if (node.pageBreak !== 'before') {
+      if (node.pageBreak !== 'before' && !node.pageBreakCalculated) {
+        node.pageBreakCalculated = true;
         var pageNumber = _.first(node.nodeInfo.pageNumbers);
 
 				var followingNodesOnPage = _.chain(followingNodeList).drop(index + 1).filter(function (node0) {
@@ -30090,9 +30131,9 @@ LayoutBuilder.prototype.tryLayoutDocument = function (docStructure, fontProvider
 
 LayoutBuilder.prototype.addBackground = function(background) {
     var backgroundGetter = isFunction(background) ? background : function() { return background; };
-    
+
     var pageBackground = backgroundGetter(this.writer.context().page + 1);
-    
+
     if (pageBackground) {
       var pageSize = this.writer.context().getCurrentPage().pageSize;
       this.writer.beginUnbreakableBlock(pageSize.width, pageSize.height);
@@ -30101,21 +30142,8 @@ LayoutBuilder.prototype.addBackground = function(background) {
     }
 };
 
-LayoutBuilder.prototype.addStaticRepeatable = function(node, x, y, width, height) {
-  var pages = this.writer.context().pages;
-  this.writer.context().page = 0;
-  
-  this.writer.beginUnbreakableBlock(width, height);
-  this.processNode(this.docMeasure.measureDocument(node));
-  var repeatable = this.writer.currentBlockToRepeatable();
-  repeatable.xOffset = x;
-  repeatable.yOffset = y;
-  this.writer.commitUnbreakableBlock(x, y);
-
-  for(var i = 1, l = pages.length; i < l; i++) {
-    this.writer.context().page = i;
-    this.writer.addFragment(repeatable, true, true, true);
-  }
+LayoutBuilder.prototype.addStaticRepeatable = function(headerOrFooter, sizeFunction) {
+  this.addDynamicRepeatable(function() { return headerOrFooter; }, sizeFunction);
 };
 
 LayoutBuilder.prototype.addDynamicRepeatable = function(nodeGetter, sizeFunction) {
@@ -30144,7 +30172,7 @@ LayoutBuilder.prototype.addHeadersAndFooters = function(header, footer) {
       height: pageMargins.top
     };
   };
-  
+
   var footerSizeFct = function (pageSize, pageMargins) {
     return {
       x: 0,
@@ -30153,7 +30181,7 @@ LayoutBuilder.prototype.addHeadersAndFooters = function(header, footer) {
       height: pageMargins.bottom
     };
   };
-  
+
   if(isFunction(header)) {
     this.addDynamicRepeatable(header, headerSizeFct);
   } else if(header) {
@@ -30163,7 +30191,7 @@ LayoutBuilder.prototype.addHeadersAndFooters = function(header, footer) {
   if(isFunction(footer)) {
     this.addDynamicRepeatable(footer, footerSizeFct);
   } else if(footer) {
-    this.addStaticRepeatable(footer, headerSizeFct);
+    this.addStaticRepeatable(footer, footerSizeFct);
   }
 };
 
@@ -30221,9 +30249,21 @@ LayoutBuilder.prototype.addWatermark = function(watermark, fontProvider){
 function decorateNode(node){
   var x = node.x, y = node.y;
   node.positions = [];
+
+  _.each(node.canvas, function(vector){
+    var x = vector.x, y = vector.y;
+    vector.resetXY = function(){
+      vector.x = x;
+      vector.y = y;
+    };
+  });
+
   node.resetXY = function(){
     node.x = x;
     node.y = y;
+    _.each(node.canvas, function(vector){
+      vector.resetXY();
+    });
   };
 }
 
@@ -30234,6 +30274,12 @@ LayoutBuilder.prototype.processNode = function(node) {
   decorateNode(node);
 
   applyMargins(function() {
+    var absPosition = node.absolutePosition;
+    if(absPosition){
+      self.writer.context().beginDetachedBlock();
+      self.writer.context().moveTo(absPosition.x || 0, absPosition.y || 0);
+    }
+
     if (node.stack) {
       self.processVerticalContainer(node);
     } else if (node.columns) {
@@ -30255,6 +30301,10 @@ LayoutBuilder.prototype.processNode = function(node) {
     }else if (!node._span) {
 		throw 'Unrecognized document structure: ' + JSON.stringify(node, fontStringify);
 		}
+
+    if(absPosition){
+      self.writer.context().endDetachedBlock();
+    }
 	});
 
 	function applyMargins(callback) {
@@ -30502,7 +30552,6 @@ LayoutBuilder.prototype.processQr = function(node) {
 	var position = this.writer.addQr(node);
     node.positions.push(position);
 };
-
 
 module.exports = LayoutBuilder;
 
@@ -32395,6 +32444,7 @@ TableProcessor.prototype.endRow = function(rowIndex, writer, pageBreaks) {
         },
         function() {
           writer.commitUnbreakableBlock();
+          self.drawHorizontalLine(rowIndex, writer);
         }
       );
     }
@@ -32938,7 +32988,5 @@ function fixFilename(filename) {
 module.exports = new VirtualFileSystem();
 
 }).call(this,require("buffer").Buffer,"/src/browser-extensions")
-},{"buffer":17}],"pdfMake":[function(require,module,exports){
-arguments[4][82][0].apply(exports,arguments)
-},{"../../libs/fileSaver":1,"../printer":92,"buffer":17,"dup":82}]},{},[82])("pdfMake")
+},{"buffer":17}]},{},[82])("fs")
 });
